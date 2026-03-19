@@ -21,14 +21,58 @@ function average(values: number[]): number {
   return values.reduce((total, value) => total + value, 0) / values.length
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right)
+  const midpoint = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0
+    ? (sorted[midpoint - 1]! + sorted[midpoint]!) / 2
+    : sorted[midpoint]!
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function bucketCurvePoints(points: CurvePoint[], minBuckets = 10, maxBuckets = 18): CurvePoint[] {
+  if (points.length <= maxBuckets) {
+    return points
+  }
+
+  const xMin = Math.min(...points.map((point) => point.x))
+  const xMax = Math.max(...points.map((point) => point.x))
+  const span = Math.max(xMax - xMin, 0.0001)
+  const bucketCount = clamp(Math.round(Math.sqrt(points.length) * 1.5), minBuckets, maxBuckets)
+  const buckets: CurvePoint[][] = Array.from({ length: bucketCount }, () => [])
+
+  for (const point of points) {
+    const ratio = (point.x - xMin) / span
+    const bucketIndex = clamp(Math.floor(ratio * bucketCount), 0, bucketCount - 1)
+    buckets[bucketIndex]!.push(point)
+  }
+
+  return buckets
+    .filter((bucket) => bucket.length > 0)
+    .map((bucket) => {
+      const x = median(bucket.map((point) => point.x))
+      const y = median(bucket.map((point) => point.y))
+      return {
+        label: bucket[Math.floor(bucket.length / 2)]!.label,
+        x,
+        y,
+      }
+    })
+}
+
 function buildSkewCurve(points: SurfacePoint[]): CurvePoint[] {
-  return [...points]
+  const rawCurve = [...points]
     .sort((left, right) => left.moneyness - right.moneyness)
     .map((point) => ({
       label: `${(point.moneyness * 100).toFixed(0)}%`,
       x: point.moneyness,
       y: point.impliedVol,
     }))
+
+  return bucketCurvePoints(rawCurve)
 }
 
 function getNearestByMoneyness(points: SurfacePoint[], targetMoneyness: number, tolerance = 0.045): SurfacePoint | null {

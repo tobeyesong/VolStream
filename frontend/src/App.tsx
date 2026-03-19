@@ -99,6 +99,33 @@ function formatDecimal(value: number | null, digits: number): string {
   return value === null ? '—' : value.toFixed(digits)
 }
 
+function formatExpiryHeadline(expirationDate: string): string {
+  const parsed = new Date(`${expirationDate}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) {
+    return expirationDate
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parsed)
+}
+
+function formatCompactStrike(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2).replace(/\.?0+$/, '')
+}
+
+function formatContractLabel(
+  point: Pick<SurfacePoint, 'contractSymbol' | 'expirationDate' | 'strike'>,
+  selectedTicker: string,
+): string {
+  const optionTypeMatch = point.contractSymbol?.match(/^(.*?)(\d{6})([CP])(\d{8})$/)
+  const optionType = optionTypeMatch?.[3]
+  const optionSuffix = optionType === 'C' || optionType === 'P' ? optionType : ''
+  return `${selectedTicker} ${formatCompactStrike(point.strike)}${optionSuffix} · ${formatExpiryHeadline(point.expirationDate)}`
+}
+
 function heatmapColor(value: number | null, min: number, max: number): string {
   if (value === null) {
     return 'rgba(138, 166, 173, 0.08)'
@@ -361,99 +388,154 @@ function LineChart({
 }
 
 function ContractDetailPanel({
-  focusPoint,
-  focusPointStatus,
+  hoveredPoint,
+  selectedPoint,
   selectedTicker,
 }: {
-  focusPoint: SurfaceHoverPoint | null
-  focusPointStatus: string
+  hoveredPoint: SurfaceHoverPoint | null
+  selectedPoint: SurfaceHoverPoint | null
   selectedTicker: string
 }) {
+  const previewPoint =
+    hoveredPoint && (!selectedPoint || pointIdentity(hoveredPoint) !== pointIdentity(selectedPoint)) ? hoveredPoint : null
+  const activePoint = selectedPoint ?? previewPoint
+  const panelState = selectedPoint ? 'pinned' : previewPoint ? 'preview' : 'empty'
+
   return (
-    <section className="scene-inspector" aria-live="polite">
+    <section className={`scene-inspector scene-inspector-${panelState}`} aria-live="polite">
       <div className="scene-inspector-head">
         <span className="eyebrow">Focus contract</span>
-        <h3>
-          {focusPoint
-            ? (focusPoint.contractSymbol ?? `${selectedTicker} ${focusPoint.expirationDate} ${focusPoint.strike.toFixed(2)}`)
-            : 'Hover or pin a contract'}
+        <h3 title={activePoint?.contractSymbol ?? undefined}>
+          {activePoint ? formatContractLabel(activePoint, selectedTicker) : 'Hover or pin a contract'}
         </h3>
-        <p className="selection-copy">{focusPoint ? `${focusPointStatus} · ${selectedTicker}` : focusPointStatus}</p>
+        <p className="selection-copy">
+          {selectedPoint
+            ? `Pinned contract · ${selectedTicker}`
+            : previewPoint
+              ? `Hover preview · click to pin ${selectedTicker}`
+              : 'Hover the lab or a contract card'}
+        </p>
       </div>
 
-      {focusPoint ? (
-        <div className="focus-grid">
-          <div>
-            <span>Ticker</span>
-            <strong>{selectedTicker}</strong>
-          </div>
-          <div>
-            <span>Expiry</span>
-            <strong>{focusPoint.expirationDate}</strong>
-          </div>
-          <div>
-            <span>Strike</span>
-            <strong>{formatCurrency(focusPoint.strike)}</strong>
-          </div>
-          <div>
-            <span>Moneyness</span>
-            <strong>{(focusPoint.moneyness * 100).toFixed(1)}%</strong>
-          </div>
-          <div>
-            <span>Implied vol</span>
-            <strong>{formatPercent(focusPoint.impliedVol)}</strong>
-          </div>
-          <div>
-            <span>IV change</span>
-            <strong>{formatIvChange(focusPoint.ivChange)}</strong>
-          </div>
-          <div>
-            <span>Delta</span>
-            <strong>{formatDecimal(focusPoint.delta, 3)}</strong>
-          </div>
-          <div>
-            <span>Gamma</span>
-            <strong>{formatDecimal(focusPoint.gamma, 4)}</strong>
-          </div>
-          <div>
-            <span>Bid</span>
-            <strong>{formatNullableCurrency(focusPoint.bid)}</strong>
-          </div>
-          <div>
-            <span>Ask</span>
-            <strong>{formatNullableCurrency(focusPoint.ask)}</strong>
-          </div>
-          <div>
-            <span>Mark</span>
-            <strong>{formatCurrency(focusPoint.optionPrice)}</strong>
-          </div>
-          <div>
-            <span>Last</span>
-            <strong>{formatNullableCurrency(focusPoint.lastPrice)}</strong>
-          </div>
-          <div>
-            <span>Volume</span>
-            <strong>{formatInteger(focusPoint.volume)}</strong>
-          </div>
-          <div>
-            <span>Open interest</span>
-            <strong>{formatInteger(focusPoint.openInterest)}</strong>
-          </div>
-          <div>
-            <span>Last trade</span>
-            <strong>{formatLastTradeTime(focusPoint.lastTradeTime)}</strong>
-          </div>
-          <div>
-            <span>Time to expiry</span>
-            <strong>{focusPoint.timeToExpiry.toFixed(3)}y</strong>
-          </div>
+      <div className="scene-inspector-body">
+        <div className={`scene-inspector-stage ${panelState === 'empty' ? 'is-active' : ''}`}>
+          <p className="scene-inspector-empty">
+            Hover the 3D lab or a contract card to preview a point. Click a point to pin it and keep the full details
+            in view.
+          </p>
         </div>
-      ) : (
-        <p className="scene-inspector-empty">
-          Hover the 3D lab or a contract card to preview a point. Click a point to pin it and keep the details in
-          view.
-        </p>
-      )}
+
+        <div className={`scene-inspector-stage ${panelState === 'preview' ? 'is-active' : ''}`}>
+          {previewPoint ? (
+            <div className="scene-preview-card">
+              <div className="scene-preview-grid">
+                <div>
+                  <span>Expiry</span>
+                  <strong>{previewPoint.expirationDate}</strong>
+                </div>
+                <div>
+                  <span>Strike</span>
+                  <strong>{formatCurrency(previewPoint.strike)}</strong>
+                </div>
+                <div>
+                  <span>Implied vol</span>
+                  <strong>{formatPercent(previewPoint.impliedVol)}</strong>
+                </div>
+                <div>
+                  <span>Moneyness</span>
+                  <strong>{(previewPoint.moneyness * 100).toFixed(1)}%</strong>
+                </div>
+                <div>
+                  <span>Delta</span>
+                  <strong>{formatDecimal(previewPoint.delta, 3)}</strong>
+                </div>
+                <div>
+                  <span>Mark</span>
+                  <strong>{formatCurrency(previewPoint.optionPrice)}</strong>
+                </div>
+              </div>
+              <p className="scene-preview-copy">Click this point to pin the full contract row and drive the 2D slices.</p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className={`scene-inspector-stage scene-inspector-stage-detail ${panelState === 'pinned' ? 'is-active' : ''}`}>
+          {selectedPoint ? (
+            <div className="focus-grid">
+              <div>
+                <span>Contract</span>
+                <strong title={selectedPoint.contractSymbol ?? undefined}>
+                  {selectedPoint.contractSymbol ?? formatContractLabel(selectedPoint, selectedTicker)}
+                </strong>
+              </div>
+              <div>
+                <span>Ticker</span>
+                <strong>{selectedTicker}</strong>
+              </div>
+              <div>
+                <span>Expiry</span>
+                <strong>{selectedPoint.expirationDate}</strong>
+              </div>
+              <div>
+                <span>Strike</span>
+                <strong>{formatCurrency(selectedPoint.strike)}</strong>
+              </div>
+              <div>
+                <span>Moneyness</span>
+                <strong>{(selectedPoint.moneyness * 100).toFixed(1)}%</strong>
+              </div>
+              <div>
+                <span>Implied vol</span>
+                <strong>{formatPercent(selectedPoint.impliedVol)}</strong>
+              </div>
+              <div>
+                <span>IV change</span>
+                <strong>{formatIvChange(selectedPoint.ivChange)}</strong>
+              </div>
+              <div>
+                <span>Delta</span>
+                <strong>{formatDecimal(selectedPoint.delta, 3)}</strong>
+              </div>
+              <div>
+                <span>Gamma</span>
+                <strong>{formatDecimal(selectedPoint.gamma, 4)}</strong>
+              </div>
+              <div>
+                <span>Bid</span>
+                <strong>{formatNullableCurrency(selectedPoint.bid)}</strong>
+              </div>
+              <div>
+                <span>Ask</span>
+                <strong>{formatNullableCurrency(selectedPoint.ask)}</strong>
+              </div>
+              <div>
+                <span>Mark</span>
+                <strong>{formatCurrency(selectedPoint.optionPrice)}</strong>
+              </div>
+              <div>
+                <span>Last</span>
+                <strong>{formatNullableCurrency(selectedPoint.lastPrice)}</strong>
+              </div>
+              <div>
+                <span>Volume</span>
+                <strong>{formatInteger(selectedPoint.volume)}</strong>
+              </div>
+              <div>
+                <span>Open interest</span>
+                <strong>{formatInteger(selectedPoint.openInterest)}</strong>
+              </div>
+              <div>
+                <span>Last trade</span>
+                <strong>{formatLastTradeTime(selectedPoint.lastTradeTime)}</strong>
+              </div>
+              <div>
+                <span>Time to expiry</span>
+                <strong>{selectedPoint.timeToExpiry.toFixed(3)}y</strong>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
     </section>
   )
 }
@@ -652,13 +734,15 @@ function App() {
   const previousPointMap = new Map((previousSurface?.points ?? []).map((point) => [pointIdentity(point), point]))
   const searchPanelVisible = searchFocused
   const surfacePending = surfaceLoading && !surface
-  const focusPoint = hoveredPoint ?? selectedPoint
-  const focusPointKey = focusPoint ? pointIdentity(focusPoint) : null
   const selectedPointKey = selectedPoint ? pointIdentity(selectedPoint) : null
-  const focusPointStatus = hoveredPoint
-    ? 'Hovering now'
-    : selectedPoint
-      ? 'Pinned contract'
+  const hoveredPointKey = hoveredPoint ? pointIdentity(hoveredPoint) : null
+  const previewPointKey = hoveredPointKey && hoveredPointKey !== selectedPointKey ? hoveredPointKey : null
+  const focusPoint = selectedPoint ?? hoveredPoint
+  const focusPointKey = focusPoint ? pointIdentity(focusPoint) : null
+  const focusPointStatus = selectedPoint
+    ? 'Pinned contract'
+    : hoveredPoint
+      ? 'Hover preview'
       : 'Hover the lab or a contract card'
   const skewSubtitle = crossSectionAnchor ? `${crossSectionAnchor.expirationDate} skew` : 'Front-month skew'
   const termSubtitle = crossSectionAnchor
@@ -979,10 +1063,8 @@ function App() {
               </div>
               <div className="scene-status">
                 <span className="scene-status-label">{focusPointStatus}</span>
-                <strong>
-                  {focusPoint
-                    ? (focusPoint.contractSymbol ?? `${focusPoint.expirationDate} @ ${focusPoint.strike.toFixed(2)}`)
-                    : 'Hover or click a point to inspect it'}
+                <strong title={focusPoint?.contractSymbol ?? undefined}>
+                  {focusPoint ? formatContractLabel(focusPoint, selectedTicker) : 'Hover or click a point to inspect it'}
                 </strong>
               </div>
             </div>
@@ -1006,8 +1088,8 @@ function App() {
                 )}
               </div>
               <ContractDetailPanel
-                focusPoint={focusPoint}
-                focusPointStatus={focusPointStatus}
+                hoveredPoint={hoveredPoint}
+                selectedPoint={selectedPoint}
                 selectedTicker={selectedTicker}
               />
             </div>
@@ -1038,7 +1120,7 @@ function App() {
                 {notableContracts.map((point, index) => {
                   const contractKey = pointIdentity(point)
                   const enrichedPoint = buildHoverPoint(point, previousPointMap)
-                  const isFocus = contractKey === focusPointKey
+                  const isFocus = contractKey === (previewPointKey ?? selectedPointKey ?? focusPointKey)
                   const isPinned = contractKey === selectedPointKey
 
                   return (
