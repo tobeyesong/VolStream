@@ -24,6 +24,14 @@ import {
 import type { CurvePoint, HeatmapMatrix, Instrument, SurfacePoint, SurfaceSnapshot } from './types'
 
 const POLL_INTERVAL_MS = 30_000
+const NAV_LINKS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'surface-lab', label: 'Surface Lab' },
+  { id: 'contracts', label: 'Richest Contracts' },
+] as const
+
+type NavSectionId = (typeof NAV_LINKS)[number]['id']
+
 const SurfaceScene = lazy(() =>
   import('./components/SurfaceScene').then((module) => ({
     default: module.SurfaceScene,
@@ -68,6 +76,11 @@ function scrollToSection(sectionId: string) {
     behavior: 'smooth',
     block: 'start',
   })
+}
+
+function getNavSectionId(hash: string): NavSectionId | null {
+  const sectionId = hash.replace(/^#/, '')
+  return NAV_LINKS.some((link) => link.id === sectionId) ? (sectionId as NavSectionId) : null
 }
 
 function findMatchingInstrument(query: string, instruments: Instrument[]): Instrument | null {
@@ -272,6 +285,12 @@ function LineChart({
 function App() {
   const [configuredInstruments, setConfiguredInstruments] = useState<Instrument[]>([])
   const [selectedTicker, setSelectedTicker] = useState('AAPL')
+  const [activeSection, setActiveSection] = useState<NavSectionId>(() => {
+    if (typeof window === 'undefined') {
+      return 'overview'
+    }
+    return getNavSectionId(window.location.hash) ?? 'overview'
+  })
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Instrument[]>([])
   const [searchFocused, setSearchFocused] = useState(false)
@@ -283,6 +302,17 @@ function App() {
   const [searchOverlayRect, setSearchOverlayRect] = useState<SearchOverlayRect | null>(null)
   const searchWrapRef = useRef<HTMLDivElement | null>(null)
   const deferredQuery = useDeferredValue(searchQuery.trim())
+
+  useEffect(() => {
+    const syncActiveSection = () => {
+      setActiveSection(getNavSectionId(window.location.hash) ?? 'overview')
+    }
+
+    syncActiveSection()
+    window.addEventListener('hashchange', syncActiveSection)
+
+    return () => window.removeEventListener('hashchange', syncActiveSection)
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -439,6 +469,7 @@ function App() {
 
     if (!query) {
       setSearchFocused(false)
+      setActiveSection('surface-lab')
       scrollToSection('surface-lab')
       return
     }
@@ -450,6 +481,7 @@ function App() {
 
     if (candidate) {
       selectInstrument(candidate, setSelectedTicker, setSearchQuery, setSearchFocused, setHoveredPoint)
+      setActiveSection('surface-lab')
       window.requestAnimationFrame(() => {
         scrollToSection('surface-lab')
       })
@@ -457,11 +489,13 @@ function App() {
     }
 
     setSearchFocused(false)
+    setActiveSection('surface-lab')
     scrollToSection('surface-lab')
   }
 
   function handleSearchSelect(instrument: Instrument) {
     selectInstrument(instrument, setSelectedTicker, setSearchQuery, setSearchFocused, setHoveredPoint)
+    setActiveSection('surface-lab')
     window.requestAnimationFrame(() => {
       scrollToSection('surface-lab')
     })
@@ -486,11 +520,17 @@ function App() {
           </section>
 
           <nav className="rail-nav" aria-label="Primary">
-            <a className="active" href="#overview">
-              Overview
-            </a>
-            <a href="#surface-lab">Surface Lab</a>
-            <a href="#contracts">Richest Contracts</a>
+            {NAV_LINKS.map((link) => (
+              <a
+                key={link.id}
+                aria-current={activeSection === link.id ? 'location' : undefined}
+                className={activeSection === link.id ? 'active' : undefined}
+                href={`#${link.id}`}
+                onClick={() => setActiveSection(link.id)}
+              >
+                {link.label}
+              </a>
+            ))}
           </nav>
         </div>
 

@@ -1,73 +1,139 @@
 # VolStream
 
-VolStream is a live implied-volatility dashboard backed by Yahoo Finance option chains and Black-Scholes IV calculations.
+VolStream is a browser-first implied volatility dashboard built on Yahoo Finance option chains and a Black-Scholes IV solver. It lets you search for tickers, pull a live surface snapshot, and inspect the shape through a heatmap, term structure, skew view, and a lightweight 3D scene.
 
-## Current stack
-
-- `computation/black_scholes.py`: implied-vol solver
-- `computation/surface_builder.py`: fetches option chains and builds the surface snapshot
-- `server/server.py`: legacy gRPC server and CLI stream client support
-- `web_api/app.py`: FastAPI bridge for the browser app
-- `frontend/`: React + TypeScript + Vite dashboard with a focused React Three Fiber scene
-- `config/instruments.json`: tracked tickers and default parameters
-
-## Architecture
+The preferred path today is:
 
 ```text
-Yahoo Finance -> surface_builder.py -> FastAPI (/api) -> React/TypeScript dashboard
-                                 \
-                                  -> gRPC server/client (legacy path)
+Yahoo Finance -> Python surface builder -> FastAPI (/api) -> React + TypeScript dashboard
 ```
 
-The browser app is the preferred UI now. The gRPC client is still available while the migration finishes.
+The older gRPC server/client flow is still in the repo, but the web app is the main interface.
 
-## Setup
+## What it does
+
+- Searches configured instruments plus live Yahoo Finance symbol results
+- Builds an implied volatility surface from option chain call data
+- Filters contracts by moneyness before solving for IV
+- Serves the surface through a small FastAPI layer
+- Renders a dashboard with:
+  - ticker search
+  - surface heatmap
+  - front-month skew
+  - ATM term structure
+  - highest-IV contracts table
+  - lazy-loaded React Three Fiber scene
+
+## Stack
+
+- Python for market-data fetch, IV calculation, API, and legacy gRPC support
+- FastAPI + Uvicorn for the browser-facing API
+- React 19 + TypeScript + Vite for the frontend
+- Yahoo Finance via `yfinance` as the data source
+- NumPy + SciPy for numerical work
+
+## Repo layout
+
+- `computation/black_scholes.py`: implied volatility solver
+- `computation/surface_builder.py`: option-chain fetch and surface snapshot builder
+- `web_api/app.py`: FastAPI endpoints consumed by the frontend
+- `frontend/`: React dashboard
+- `config/instruments.json`: tracked instruments and surface defaults
+- `server/server.py`: legacy gRPC server
+- `client/client.py`: legacy CLI client and instrument search
+
+## Quick start
+
+Prerequisites:
+
+- Python 3.10+
+- A recent Node.js + npm install
+
+Install dependencies:
 
 ```bash
-# Python dependencies
 make install
-
-# Frontend dependencies
 make frontend-install
 ```
 
-## Run the web app
-
-In one terminal:
+Run the API in one terminal:
 
 ```bash
 make web-api
 ```
 
-In a second terminal:
+Run the frontend in a second terminal:
 
 ```bash
 make frontend-dev
 ```
 
-Then open [http://127.0.0.1:5173](http://127.0.0.1:5173).
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173).
 
-## Optional legacy flow
+## Make targets
 
 ```bash
-make proto
-make server
+make install            # create .venv and install Python deps
+make proto              # regenerate gRPC stubs
+make web-api            # run FastAPI with reload
+make frontend-install   # install frontend packages
+make frontend-dev       # run Vite dev server
+make frontend-build     # production frontend build
+make server             # legacy gRPC server
 make search SEARCH_QUERY=apple
 make client TICKER=AAPL
 ```
 
+## API surface
+
+The FastAPI app lives in `web_api/app.py` and exposes:
+
+- `GET /api/health`: health check
+- `GET /api/instruments`: instruments from `config/instruments.json`
+- `GET /api/instruments/search?q=AAPL&limit=8`: symbol/company lookup
+- `GET /api/surface/{ticker}`: current surface snapshot for a ticker
+
+Example:
+
+```bash
+curl http://127.0.0.1:8000/api/surface/AAPL
+```
+
 ## Configuration
 
-Edit `config/instruments.json` to change:
+Edit `config/instruments.json` to control:
 
-- tracked ticker symbols
-- risk-free rate
-- dividend yield
-- update interval
-- moneyness filter range
+- tracked instruments shown by default
+- `risk_free_rate`
+- `dividend_yield`
+- `moneyness_min`
+- `moneyness_max`
+- `update_interval_seconds`
+- legacy gRPC host/port settings
 
-## Notes
+Current defaults include `AAPL`, `SPY`, `TSLA`, and `QQQ`.
 
-- The web dashboard currently polls the API every 30 seconds and updates React state in place.
-- The 3D surface is intentionally lazy-loaded so the core dashboard stays lighter.
-- Yahoo Finance is free to prototype against, but it is not a production-grade market-data contract.
+## Legacy gRPC workflow
+
+The browser app is the main product, but the original gRPC path still works:
+
+```bash
+make proto
+make server
+make search SEARCH_QUERY=tesla
+make client TICKER=TSLA
+```
+
+## Implementation notes
+
+- Surface snapshots are built from call options across all available expirations.
+- Contracts outside the configured moneyness band are ignored.
+- IV points with invalid or obviously nonsensical outputs are dropped.
+- The frontend polls for fresh surface data every 30 seconds.
+- The 3D scene is lazy-loaded so the first dashboard render stays lighter.
+
+## Limitations
+
+- Yahoo Finance is useful for prototyping, but it is not a production-grade market data feed.
+- Availability and latency depend on the upstream Yahoo endpoints.
+- There is no automated test suite in the repo yet.
