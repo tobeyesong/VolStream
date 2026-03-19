@@ -12,6 +12,19 @@ export type SurfacePoint = {
   impliedVol: number
   optionPrice: number
   expirationDate: string
+  contractSymbol: string | null
+  bid: number | null
+  ask: number | null
+  lastPrice: number | null
+  volume: number | null
+  openInterest: number | null
+  lastTradeTime: string | null
+  delta: number | null
+  gamma: number | null
+}
+
+export type SurfaceHoverPoint = SurfacePoint & {
+  ivChange: number | null
 }
 
 export type SurfaceSnapshot = {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import yfinance as yf
@@ -18,6 +19,16 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "instruments.json"
 MAX_SEARCH_RESULTS = 20
 SUPPORTED_SEARCH_TYPES = {"EQUITY", "ETF", "INDEX"}
+DEFAULT_CORS_ORIGINS = (
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+)
+
+
+def parse_cors_origins(raw_origins: str | None) -> list[str]:
+    if not raw_origins:
+        return list(DEFAULT_CORS_ORIGINS)
+    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 
 class InstrumentOut(BaseModel):
@@ -34,6 +45,15 @@ class SurfacePointOut(BaseModel):
     implied_vol: float
     option_price: float
     expiration_date: str
+    contract_symbol: str | None = None
+    bid: float | None = None
+    ask: float | None = None
+    last_price: float | None = None
+    volume: int | None = None
+    open_interest: int | None = None
+    last_trade_time: str | None = None
+    delta: float | None = None
+    gamma: float | None = None
 
 
 class SurfaceSnapshotOut(BaseModel):
@@ -151,6 +171,15 @@ def snapshot_payload(snapshot: VolSurfaceSnapshot) -> SurfaceSnapshotOut:
                 implied_vol=point.implied_vol,
                 option_price=point.option_price,
                 expiration_date=point.expiration_date,
+                contract_symbol=point.contract_symbol,
+                bid=point.bid,
+                ask=point.ask,
+                last_price=point.last_price,
+                volume=point.volume,
+                open_interest=point.open_interest,
+                last_trade_time=point.last_trade_time,
+                delta=point.delta,
+                gamma=point.gamma,
             )
             for point in snapshot.points
         ],
@@ -160,10 +189,8 @@ def snapshot_payload(snapshot: VolSurfaceSnapshot) -> SurfaceSnapshotOut:
 app = FastAPI(title="VolStream API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ],
+    allow_origins=parse_cors_origins(os.getenv("VOLSTREAM_CORS_ORIGINS")),
+    allow_origin_regex=os.getenv("VOLSTREAM_CORS_ORIGIN_REGEX") or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

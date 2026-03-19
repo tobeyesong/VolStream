@@ -3,15 +3,15 @@ Surface builder — pulls option chain data from Yahoo Finance and constructs
 the full implied volatility surface for a given ticker.
 """
 
-import time
 import logging
+import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 import numpy as np
 import yfinance as yf
 
-from computation.black_scholes import implied_volatility
+from computation.black_scholes import bs_greeks, implied_volatility
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,15 @@ class SurfacePointData:
     implied_vol: float
     option_price: float
     expiration_date: str        # ISO date
+    contract_symbol: str | None = None
+    bid: float | None = None
+    ask: float | None = None
+    last_price: float | None = None
+    volume: int | None = None
+    open_interest: int | None = None
+    last_trade_time: str | None = None
+    delta: float | None = None
+    gamma: float | None = None
 
 
 @dataclass
@@ -97,12 +106,13 @@ def build_surface(
                     continue
 
                 # Use mid-price if available, otherwise last price
-                bid = float(row.get("bid", 0) or 0)
-                ask = float(row.get("ask", 0) or 0)
-                if bid > 0 and ask > 0:
+                bid = _coerce_float(row.get("bid"))
+                ask = _coerce_float(row.get("ask"))
+                last_price = _coerce_float(row.get("lastPrice"))
+                if bid is not None and ask is not None and bid > 0 and ask > 0:
                     market_price = (bid + ask) / 2.0
                 else:
-                    market_price = float(row.get("lastPrice", 0) or 0)
+                    market_price = last_price or 0
 
                 if market_price <= 0:
                     continue
@@ -119,6 +129,15 @@ def build_surface(
                 if iv is None or iv <= 0 or iv > 3.0:
                     continue  # discard nonsensical IVs
 
+                greeks = bs_greeks(
+                    S=spot,
+                    K=strike,
+                    T=T,
+                    r=risk_free_rate,
+                    q=dividend_yield,
+                    sigma=iv,
+                )
+
                 points.append(SurfacePointData(
                     strike=strike,
                     moneyness=round(moneyness, 6),
@@ -126,6 +145,15 @@ def build_surface(
                     implied_vol=round(iv, 6),
                     option_price=round(market_price, 4),
                     expiration_date=exp_str,
+                    contract_symbol=_coerce_text(row.get("contractSymbol")),
+                    bid=round(bid, 4) if bid is not None else None,
+                    ask=round(ask, 4) if ask is not None else None,
+                    last_price=round(last_price, 4) if last_price is not None else None,
+                    volume=_coerce_int(row.get("volume")),
+                    open_interest=_coerce_int(row.get("openInterest")),
+                    last_trade_time=_serialize_timestamp(row.get("lastTradeDate")),
+                    delta=round(greeks["delta"], 6),
+                    gamma=round(greeks["gamma"], 6),
                 ))
                 exp_added = True
 
@@ -153,6 +181,51 @@ def build_surface(
     except Exception as e:
         logger.error(f"Error building surface for {ticker}: {e}")
         return None
+
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    return parsed if np.isfinite(parsed) else None
+
+
+def _coerce_int(value: object) -> int | None:
+    parsed = _coerce_float(value)
+    return int(parsed) if parsed is not None else None
+
+
+def _coerce_text(value: object) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none"}:
+        return None
+    return text
+
+
+def _serialize_timestamp(value: object) -> str | None:
+    if value is None:
+        return None
+
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except TypeError:
+            pass
+
+    return _coerce_text(value)
 
 
 def compute_incremental_update(

@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="mesh-fill" x1="42" y1="82" x2="132" y2="196" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50697b"/>
+      <stop offset="0.52" stop-color="#2f4150"/>
+      <stop offset="1" stop-color="#1b2732"/>
+    </linearGradient>
+    <linearGradient id="cyan-fill" x1="140" y1="82" x2="201" y2="173" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6eeaff"/>
+      <stop offset="0.55" stop-color="#11c3e4"/>
+      <stop offset="1" stop-color="#0d7a9b"/>
+    </linearGradient>
+    <linearGradient id="orange-fill" x1="142" y1="151" x2="180" y2="208" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffca2e"/>
+      <stop offset="0.42" stop-color="#ff8f00"/>
+      <stop offset="1" stop-color="#e45a00"/>
+    </linearGradient>
+    <linearGradient id="steel-fill" x1="96" y1="108" x2="146" y2="194" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4fbff"/>
+      <stop offset="0.48" stop-color="#c9d6df"/>
+      <stop offset="1" stop-color="#8093a3"/>
+    </linearGradient>
+    <linearGradient id="steel-edge" x1="116" y1="106" x2="96" y2="198" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6b7987"/>
+      <stop offset="1" stop-color="#dce6ee"/>
+    </linearGradient>
+    <radialGradient id="cyan-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(178 112) rotate(90) scale(70 72)">
+      <stop offset="0" stop-color="#21daff" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#21daff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orange-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(160 186) rotate(90) scale(56 68)">
+      <stop offset="0" stop-color="#ff8e1f" stop-opacity="0.56"/>
+      <stop offset="1" stop-color="#ff8e1f" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="mark-shadow" x="20" y="58" width="204" height="170" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#02070c" flood-opacity="0.36"/>
+    </filter>
+    <clipPath id="mesh-clip">
+      <path d="M48 82L116 82L150 88L124 140L114 178L35 133L58 104L48 82Z"/>
+    </clipPath>
+    <clipPath id="cyan-clip">
+      <path d="M140 88L210 80L177 154L122 205L147 153L171 112L140 88Z"/>
+    </clipPath>
+    <clipPath id="orange-clip">
+      <path d="M147 153L177 154L154 180L122 205L136 176L147 153Z"/>
+    </clipPath>
+  </defs>
+
+  <ellipse cx="176" cy="112" rx="72" ry="70" fill="url(#cyan-glow)"/>
+  <ellipse cx="158" cy="184" rx="68" ry="56" fill="url(#orange-glow)"/>
+
+  <g filter="url(#mark-shadow)">
+    <g clip-path="url(#mesh-clip)">
+      <path d="M48 82L116 82L150 88L124 140L114 178L35 133L58 104L48 82Z" fill="url(#mesh-fill)"/>
+      <path d="M45 96C76 93 108 92 150 96" stroke="#6e8697" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.78"/>
+      <path d="M39 118C72 111 104 110 138 114" stroke="#677d8d" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.76"/>
+      <path d="M33 141C61 132 92 131 122 136" stroke="#637887" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.74"/>
+      <path d="M57 82L35 133" stroke="#0a1017" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.78"/>
+      <path d="M84 82L60 152" stroke="#0b1219" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.78"/>
+      <path d="M115 82L85 170" stroke="#0b1219" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.78"/>
+      <path d="M139 88L112 178" stroke="#091017" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.78"/>
+    </g>
+
+    <g clip-path="url(#cyan-clip)">
+      <path d="M140 88L210 80L177 154L122 205L147 153L171 112L140 88Z" fill="url(#cyan-fill)"/>
+      <path d="M147 97C166 96 186 93 207 88" stroke="#93f2ff" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.68"/>
+      <path d="M138 118C161 118 182 116 196 111" stroke="#0f4a63" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.78"/>
+      <path d="M129 140C151 139 169 137 187 132" stroke="#0d455d" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.78"/>
+      <path d="M159 86L137 126" stroke="#0d556e" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.76"/>
+      <path d="M189 83L164 127" stroke="#0d556e" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.76"/>
+      <path d="M205 102L178 145" stroke="#0d556e" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.76"/>
+    </g>
+
+    <g clip-path="url(#orange-clip)">
+      <path d="M147 153L177 154L154 180L122 205L136 176L147 153Z" fill="url(#orange-fill)"/>
+      <path d="M146 163C156 162 166 162 174 161" stroke="#ffd164" stroke-width="2.4" stroke-linecap="round" stroke-opacity="0.7"/>
+      <path d="M138 178C147 176 155 175 162 174" stroke="#7e3000" stroke-width="2.4" stroke-linecap="round" stroke-opacity="0.7"/>
+    </g>
+
+    <path d="M48 82L116 82L150 88" stroke="#0a1017" stroke-width="2.6" stroke-linejoin="round" stroke-opacity="0.55"/>
+    <path d="M150 88L210 80L177 154L122 205" stroke="#0a1017" stroke-width="2.6" stroke-linejoin="round" stroke-opacity="0.5"/>
+    <path d="M35 133L114 178" stroke="#0a1017" stroke-width="2.6" stroke-linecap="round" stroke-opacity="0.48"/>
+
+    <path d="M84 109L101 106L146 194L130 201L84 109Z" fill="url(#steel-fill)"/>
+    <path d="M95 106L111 105L156 193L146 194L95 106Z" fill="url(#steel-edge)" fill-opacity="0.42"/>
+    <path d="M84 109L101 106L146 194" stroke="#f3fbff" stroke-width="1.8" stroke-linejoin="round" stroke-opacity="0.5"/>
+    <path d="M130 201L84 109" stroke="#6f7e8d" stroke-width="1.6" stroke-linecap="round" stroke-opacity="0.62"/>
+  </g>
+</svg>

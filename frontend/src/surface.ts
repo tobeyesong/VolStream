@@ -21,6 +21,32 @@ function average(values: number[]): number {
   return values.reduce((total, value) => total + value, 0) / values.length
 }
 
+function buildSkewCurve(points: SurfacePoint[]): CurvePoint[] {
+  return [...points]
+    .sort((left, right) => left.moneyness - right.moneyness)
+    .map((point) => ({
+      label: `${(point.moneyness * 100).toFixed(0)}%`,
+      x: point.moneyness,
+      y: point.impliedVol,
+    }))
+}
+
+function getNearestByMoneyness(points: SurfacePoint[], targetMoneyness: number, tolerance = 0.045): SurfacePoint | null {
+  if (points.length === 0) {
+    return null
+  }
+
+  const nearest = [...points].sort(
+    (left, right) => Math.abs(left.moneyness - targetMoneyness) - Math.abs(right.moneyness - targetMoneyness),
+  )[0]
+
+  if (!nearest || Math.abs(nearest.moneyness - targetMoneyness) > tolerance) {
+    return null
+  }
+
+  return nearest
+}
+
 export function buildSurfaceSummary(snapshot: SurfaceSnapshot): SurfaceSummary {
   const frontExpiry = getFrontExpiry(snapshot.points)
   const frontPoints = snapshot.points.filter((point) => point.expirationDate === frontExpiry)
@@ -113,14 +139,32 @@ export function buildTermStructure(snapshot: SurfaceSnapshot): CurvePoint[] {
 
 export function buildFrontExpirySkew(snapshot: SurfaceSnapshot): CurvePoint[] {
   const frontExpiry = getFrontExpiry(snapshot.points)
-  return snapshot.points
-    .filter((point) => point.expirationDate === frontExpiry)
-    .sort((left, right) => left.moneyness - right.moneyness)
-    .map((point) => ({
-      label: `${(point.moneyness * 100).toFixed(0)}%`,
-      x: point.moneyness,
-      y: point.impliedVol,
-    }))
+  return buildSkewForExpiry(snapshot, frontExpiry)
+}
+
+export function buildSkewForExpiry(snapshot: SurfaceSnapshot, expirationDate: string): CurvePoint[] {
+  return buildSkewCurve(snapshot.points.filter((point) => point.expirationDate === expirationDate))
+}
+
+export function buildTermStructureForMoneyness(
+  snapshot: SurfaceSnapshot,
+  targetMoneyness: number,
+  tolerance = 0.045,
+): CurvePoint[] {
+  return [...snapshot.expirations]
+    .sort()
+    .map((expirationDate) => {
+      const points = snapshot.points.filter((point) => point.expirationDate === expirationDate)
+      const nearestPoint = getNearestByMoneyness(points, targetMoneyness, tolerance)
+      return nearestPoint
+        ? {
+            label: expirationDate.slice(5),
+            x: nearestPoint.timeToExpiry,
+            y: nearestPoint.impliedVol,
+          }
+        : null
+    })
+    .filter((point): point is CurvePoint => point !== null)
 }
 
 export function buildNotableContracts(snapshot: SurfaceSnapshot): SurfacePoint[] {

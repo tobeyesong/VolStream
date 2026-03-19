@@ -17,11 +17,13 @@ import {
   buildFrontExpirySkew,
   buildHeatmap,
   buildNotableContracts,
+  buildSkewForExpiry,
   buildSurfaceSummary,
   buildTermStructure,
+  buildTermStructureForMoneyness,
   sampleScenePoints,
 } from './surface'
-import type { CurvePoint, HeatmapMatrix, Instrument, SurfacePoint, SurfaceSnapshot } from './types'
+import type { CurvePoint, HeatmapMatrix, Instrument, SurfaceHoverPoint, SurfacePoint, SurfaceSnapshot } from './types'
 
 const POLL_INTERVAL_MS = 30_000
 const NAV_LINKS = [
@@ -46,8 +48,20 @@ function formatCurrency(value: number): string {
   }).format(value)
 }
 
+function formatNullableCurrency(value: number | null): string {
+  return value === null ? '—' : formatCurrency(value)
+}
+
 function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`
+}
+
+function formatIvChange(value: number | null): string {
+  if (value === null) {
+    return '—'
+  }
+
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)} pts`
 }
 
 function formatTimestamp(timestampMs: number): string {
@@ -57,6 +71,32 @@ function formatTimestamp(timestampMs: number): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(timestampMs)
+}
+
+function formatLastTradeTime(value: string | null): string {
+  if (!value) {
+    return '—'
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(parsed)
+}
+
+function formatInteger(value: number | null): string {
+  return value === null ? '—' : new Intl.NumberFormat('en-US').format(value)
+}
+
+function formatDecimal(value: number | null, digits: number): string {
+  return value === null ? '—' : value.toFixed(digits)
 }
 
 function heatmapColor(value: number | null, min: number, max: number): string {
@@ -98,17 +138,32 @@ function findMatchingInstrument(query: string, instruments: Instrument[]): Instr
   )
 }
 
+function pointIdentity(point: Pick<SurfacePoint, 'expirationDate' | 'strike'>): string {
+  return `${point.expirationDate}:${point.strike.toFixed(2)}`
+}
+
+function buildHoverPoint(point: SurfacePoint, previousPointMap: Map<string, SurfacePoint>): SurfaceHoverPoint {
+  const previousPoint = previousPointMap.get(pointIdentity(point))
+
+  return {
+    ...point,
+    ivChange: previousPoint ? (point.impliedVol - previousPoint.impliedVol) * 100 : null,
+  }
+}
+
 function selectInstrument(
   instrument: Instrument,
   setSelectedTicker: (ticker: string) => void,
   setSearchQuery: (query: string) => void,
   setSearchFocused: (focused: boolean) => void,
-  setHoveredPoint: (point: SurfacePoint | null) => void,
+  setHoveredPoint: (point: SurfaceHoverPoint | null) => void,
+  setSelectedPoint: (point: SurfaceHoverPoint | null) => void,
 ) {
   setSelectedTicker(instrument.ticker)
   setSearchQuery('')
   setSearchFocused(false)
   setHoveredPoint(null)
+  setSelectedPoint(null)
 }
 
 type SearchOverlayRect = {
@@ -198,16 +253,37 @@ function StatCard({ label, value, detail }: { label: string; value: string; deta
   )
 }
 
+function EmptyPanel({
+  children,
+  loading = false,
+}: {
+  children: string
+  loading?: boolean
+}) {
+  return (
+    <div
+      aria-live={loading ? 'polite' : undefined}
+      className={`empty-panel ${loading ? 'empty-panel-loading' : ''}`}
+      role={loading ? 'status' : undefined}
+    >
+      {loading ? <div aria-hidden="true" className="empty-panel-loader" /> : null}
+      <span>{children}</span>
+    </div>
+  )
+}
+
 function LineChart({
   title,
   subtitle,
   points,
+  loading = false,
   valueFormatter,
   className = '',
 }: {
   title: string
   subtitle: string
   points: CurvePoint[]
+  loading?: boolean
   valueFormatter: (value: number) => string
   className?: string
 }) {
@@ -222,7 +298,9 @@ function LineChart({
             <h3>{subtitle}</h3>
           </div>
         </div>
-        <div className="empty-panel">Need more valid option points to draw this curve.</div>
+        <EmptyPanel loading={loading}>
+          {loading ? 'Fetching the latest curve points...' : 'Need more valid option points to draw this curve.'}
+        </EmptyPanel>
       </article>
     )
   }
@@ -282,9 +360,108 @@ function LineChart({
   )
 }
 
+function ContractDetailPanel({
+  focusPoint,
+  focusPointStatus,
+  selectedTicker,
+}: {
+  focusPoint: SurfaceHoverPoint | null
+  focusPointStatus: string
+  selectedTicker: string
+}) {
+  return (
+    <section className="scene-inspector" aria-live="polite">
+      <div className="scene-inspector-head">
+        <span className="eyebrow">Focus contract</span>
+        <h3>
+          {focusPoint
+            ? (focusPoint.contractSymbol ?? `${selectedTicker} ${focusPoint.expirationDate} ${focusPoint.strike.toFixed(2)}`)
+            : 'Hover or pin a contract'}
+        </h3>
+        <p className="selection-copy">{focusPoint ? `${focusPointStatus} · ${selectedTicker}` : focusPointStatus}</p>
+      </div>
+
+      {focusPoint ? (
+        <div className="focus-grid">
+          <div>
+            <span>Ticker</span>
+            <strong>{selectedTicker}</strong>
+          </div>
+          <div>
+            <span>Expiry</span>
+            <strong>{focusPoint.expirationDate}</strong>
+          </div>
+          <div>
+            <span>Strike</span>
+            <strong>{formatCurrency(focusPoint.strike)}</strong>
+          </div>
+          <div>
+            <span>Moneyness</span>
+            <strong>{(focusPoint.moneyness * 100).toFixed(1)}%</strong>
+          </div>
+          <div>
+            <span>Implied vol</span>
+            <strong>{formatPercent(focusPoint.impliedVol)}</strong>
+          </div>
+          <div>
+            <span>IV change</span>
+            <strong>{formatIvChange(focusPoint.ivChange)}</strong>
+          </div>
+          <div>
+            <span>Delta</span>
+            <strong>{formatDecimal(focusPoint.delta, 3)}</strong>
+          </div>
+          <div>
+            <span>Gamma</span>
+            <strong>{formatDecimal(focusPoint.gamma, 4)}</strong>
+          </div>
+          <div>
+            <span>Bid</span>
+            <strong>{formatNullableCurrency(focusPoint.bid)}</strong>
+          </div>
+          <div>
+            <span>Ask</span>
+            <strong>{formatNullableCurrency(focusPoint.ask)}</strong>
+          </div>
+          <div>
+            <span>Mark</span>
+            <strong>{formatCurrency(focusPoint.optionPrice)}</strong>
+          </div>
+          <div>
+            <span>Last</span>
+            <strong>{formatNullableCurrency(focusPoint.lastPrice)}</strong>
+          </div>
+          <div>
+            <span>Volume</span>
+            <strong>{formatInteger(focusPoint.volume)}</strong>
+          </div>
+          <div>
+            <span>Open interest</span>
+            <strong>{formatInteger(focusPoint.openInterest)}</strong>
+          </div>
+          <div>
+            <span>Last trade</span>
+            <strong>{formatLastTradeTime(focusPoint.lastTradeTime)}</strong>
+          </div>
+          <div>
+            <span>Time to expiry</span>
+            <strong>{focusPoint.timeToExpiry.toFixed(3)}y</strong>
+          </div>
+        </div>
+      ) : (
+        <p className="scene-inspector-empty">
+          Hover the 3D lab or a contract card to preview a point. Click a point to pin it and keep the details in
+          view.
+        </p>
+      )}
+    </section>
+  )
+}
+
 function App() {
   const [configuredInstruments, setConfiguredInstruments] = useState<Instrument[]>([])
   const [selectedTicker, setSelectedTicker] = useState('AAPL')
+  const [surfaceRefreshNonce, setSurfaceRefreshNonce] = useState(0)
   const [activeSection, setActiveSection] = useState<NavSectionId>(() => {
     if (typeof window === 'undefined') {
       return 'overview'
@@ -296,12 +473,19 @@ function App() {
   const [searchFocused, setSearchFocused] = useState(false)
   const [searchBusy, setSearchBusy] = useState(false)
   const [surface, setSurface] = useState<SurfaceSnapshot | null>(null)
+  const [previousSurface, setPreviousSurface] = useState<SurfaceSnapshot | null>(null)
   const [surfaceError, setSurfaceError] = useState<string | null>(null)
   const [surfaceLoading, setSurfaceLoading] = useState(false)
-  const [hoveredPoint, setHoveredPoint] = useState<SurfacePoint | null>(null)
+  const [hoveredPoint, setHoveredPoint] = useState<SurfaceHoverPoint | null>(null)
+  const [selectedPoint, setSelectedPoint] = useState<SurfaceHoverPoint | null>(null)
   const [searchOverlayRect, setSearchOverlayRect] = useState<SearchOverlayRect | null>(null)
   const searchWrapRef = useRef<HTMLDivElement | null>(null)
+  const surfaceRef = useRef<SurfaceSnapshot | null>(null)
   const deferredQuery = useDeferredValue(searchQuery.trim())
+
+  useEffect(() => {
+    surfaceRef.current = surface
+  }, [surface])
 
   useEffect(() => {
     const syncActiveSection = () => {
@@ -417,10 +601,13 @@ function App() {
         if (!active) {
           return
         }
+        const priorSurface = surfaceRef.current
         startTransition(() => {
+          setPreviousSurface(priorSurface && priorSurface.ticker === nextSurface.ticker ? priorSurface : null)
           setSurface(nextSurface)
           setSurfaceError(null)
           setHoveredPoint(null)
+          setSelectedPoint(null)
         })
       } catch (error) {
         if (!active) {
@@ -443,7 +630,7 @@ function App() {
       active = false
       window.clearInterval(intervalId)
     }
-  }, [selectedTicker])
+  }, [selectedTicker, surfaceRefreshNonce])
 
   const activeInstrument =
     configuredInstruments.find((instrument) => instrument.ticker === selectedTicker) ??
@@ -452,11 +639,31 @@ function App() {
 
   const summary = surface ? buildSurfaceSummary(surface) : null
   const heatmap = surface ? buildHeatmap(surface) : null
-  const termStructure = surface ? buildTermStructure(surface) : []
-  const frontSkew = surface ? buildFrontExpirySkew(surface) : []
+  const crossSectionAnchor = selectedPoint
+  const termStructure = surface
+    ? (crossSectionAnchor ? buildTermStructureForMoneyness(surface, crossSectionAnchor.moneyness) : buildTermStructure(surface))
+    : []
+  const frontSkew = surface
+    ? (crossSectionAnchor ? buildSkewForExpiry(surface, crossSectionAnchor.expirationDate) : buildFrontExpirySkew(surface))
+    : []
   const notableContracts = surface ? buildNotableContracts(surface) : []
   const scenePoints = surface ? sampleScenePoints(surface.points) : []
+  const previousScenePoints = previousSurface ? sampleScenePoints(previousSurface.points) : []
+  const previousPointMap = new Map((previousSurface?.points ?? []).map((point) => [pointIdentity(point), point]))
   const searchPanelVisible = searchFocused
+  const surfacePending = surfaceLoading && !surface
+  const focusPoint = hoveredPoint ?? selectedPoint
+  const focusPointKey = focusPoint ? pointIdentity(focusPoint) : null
+  const selectedPointKey = selectedPoint ? pointIdentity(selectedPoint) : null
+  const focusPointStatus = hoveredPoint
+    ? 'Hovering now'
+    : selectedPoint
+      ? 'Pinned contract'
+      : 'Hover the lab or a contract card'
+  const skewSubtitle = crossSectionAnchor ? `${crossSectionAnchor.expirationDate} skew` : 'Front-month skew'
+  const termSubtitle = crossSectionAnchor
+    ? `${(crossSectionAnchor.moneyness * 100).toFixed(0)}% moneyness term structure`
+    : 'ATM term structure'
   const heroStatus = surfaceError
     ? 'Live feed temporarily unavailable.'
     : surfaceLoading
@@ -469,6 +676,9 @@ function App() {
 
     if (!query) {
       setSearchFocused(false)
+      setHoveredPoint(null)
+      setSelectedPoint(null)
+      setSurfaceRefreshNonce((current) => current + 1)
       setActiveSection('surface-lab')
       scrollToSection('surface-lab')
       return
@@ -480,7 +690,8 @@ function App() {
       null
 
     if (candidate) {
-      selectInstrument(candidate, setSelectedTicker, setSearchQuery, setSearchFocused, setHoveredPoint)
+      selectInstrument(candidate, setSelectedTicker, setSearchQuery, setSearchFocused, setHoveredPoint, setSelectedPoint)
+      setSurfaceRefreshNonce((current) => current + 1)
       setActiveSection('surface-lab')
       window.requestAnimationFrame(() => {
         scrollToSection('surface-lab')
@@ -494,72 +705,96 @@ function App() {
   }
 
   function handleSearchSelect(instrument: Instrument) {
-    selectInstrument(instrument, setSelectedTicker, setSearchQuery, setSearchFocused, setHoveredPoint)
+    selectInstrument(instrument, setSelectedTicker, setSearchQuery, setSearchFocused, setHoveredPoint, setSelectedPoint)
+    setSurfaceRefreshNonce((current) => current + 1)
     setActiveSection('surface-lab')
     window.requestAnimationFrame(() => {
       scrollToSection('surface-lab')
     })
   }
 
+  function previewContract(point: SurfacePoint | null) {
+    setHoveredPoint(point ? buildHoverPoint(point, previousPointMap) : null)
+  }
+
+  function pinContract(point: SurfacePoint | null) {
+    if (!point) {
+      setSelectedPoint(null)
+      return
+    }
+
+    const nextPointKey = pointIdentity(point)
+    setSelectedPoint((current) =>
+      current && pointIdentity(current) === nextPointKey ? null : buildHoverPoint(point, previousPointMap),
+    )
+  }
+
   return (
     <div className="app-shell">
-      <aside className="primary-rail">
-        <div className="rail-stack">
-          <div className="brand-lockup">
-            <span className="brand-mark">V</span>
-            <div>
-              <span className="brand-name">VolStream</span>
-              <p>Live volatility desk</p>
-            </div>
+      <header className="app-chrome">
+        <div className="brand-lockup">
+          <div className="brand-mark" aria-hidden="true">
+            <img src="/logo-mark.svg" alt="" />
           </div>
+          <div>
+            <span className="brand-name">VolStream</span>
+            <p>Live volatility desk</p>
+          </div>
+        </div>
 
-          <section className="rail-status card">
-            <span className="eyebrow">Selected</span>
+        <nav className="section-nav" aria-label="Primary">
+          {NAV_LINKS.map((link) => (
+            <a
+              key={link.id}
+              aria-current={activeSection === link.id ? 'location' : undefined}
+              className={`section-link ${activeSection === link.id ? 'active' : ''}`}
+              href={`#${link.id}`}
+              onClick={() => setActiveSection(link.id)}
+            >
+              {link.label}
+            </a>
+          ))}
+        </nav>
+
+        <section className="chrome-status">
+          <div className="chrome-status-copy">
+            <span className="eyebrow">Live selection</span>
             <strong>{selectedTicker}</strong>
             <p>{surface ? `Updated ${formatTimestamp(surface.timestampMs)}` : 'Waiting for live surface'}</p>
-          </section>
-
-          <nav className="rail-nav" aria-label="Primary">
-            {NAV_LINKS.map((link) => (
-              <a
-                key={link.id}
-                aria-current={activeSection === link.id ? 'location' : undefined}
-                className={activeSection === link.id ? 'active' : undefined}
-                href={`#${link.id}`}
-                onClick={() => setActiveSection(link.id)}
-              >
-                {link.label}
-              </a>
-            ))}
-          </nav>
-        </div>
-
-        <div className="rail-footer">
-          <span>Yahoo Finance source</span>
-          <span>30s poll</span>
-        </div>
-      </aside>
+          </div>
+          <div className="chrome-pill-group">
+            <span className="hero-pill">Yahoo Finance source</span>
+            <span className="hero-pill">30s poll</span>
+          </div>
+        </section>
+      </header>
 
       <main className="app-frame">
         <section className="hero-panel" id="overview">
           <div className="hero-copy">
             <span className="eyebrow">Live volatility desk</span>
-            <h1>Read the market&apos;s volatility surface.</h1>
+            <h1>Read the surface without fighting the layout.</h1>
             <p className="hero-copy-text">
-              Search a ticker, then inspect the live chain by expiry, moneyness, and the contracts carrying the
-              richest implied volatility.
+              Search a ticker, scan the surface map, then move into a wider shape lab and pin the contracts that
+              deserve a second look.
             </p>
 
-            <form className={`hero-search ${searchPanelVisible ? 'hero-search-open' : ''}`} onSubmit={handleSearchSubmit}>
-              <label className="search-label" htmlFor="ticker-search">
+            <form
+              className={`mt-[1.35rem] grid max-w-[43rem] gap-2.5 ${searchPanelVisible ? 'relative z-[1705]' : ''}`}
+              onSubmit={handleSearchSubmit}
+            >
+              <label className="mb-1 block text-[0.72rem] uppercase tracking-[0.12em] text-white/64" htmlFor="ticker-search">
                 Search ticker or company
               </label>
-              <div className="search-row">
-                <div ref={searchWrapRef} className={`search-wrap ${searchPanelVisible ? 'search-wrap-open' : ''}`}>
+              <div
+                ref={searchWrapRef}
+                className={`flex items-stretch gap-0 ${searchPanelVisible ? 'relative z-[1706]' : ''}`}
+              >
+                <div className="relative min-w-0 flex-1 basis-[30rem]">
                   <input
                     id="ticker-search"
                     autoComplete="off"
-                    className="search-input"
+                    className="search-input min-h-[3.35rem] w-full min-w-0 rounded-l-[1.1rem] rounded-r-none border border-r-0 border-white/18 bg-[#2b3138] px-[1.15rem] py-[0.95rem] text-white caret-[#dff8f8] shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_10px_24px_rgba(1,8,10,0.18)] outline-none placeholder:text-white/95 focus:border-cyan-300/45 focus:ring-4 focus:ring-cyan-300/10"
                     aria-expanded={searchPanelVisible}
                     aria-haspopup="listbox"
                     aria-controls="ticker-search-results"
@@ -570,8 +805,11 @@ function App() {
                     value={searchQuery}
                   />
                 </div>
-                <button className="primary-button" type="submit">
-                  Inspect surface
+                <button
+                  className="min-h-[3.35rem] shrink-0 whitespace-nowrap rounded-l-none rounded-r-[1.1rem] border border-white/18 bg-[linear-gradient(180deg,rgba(20,52,58,0.98),rgba(9,21,25,0.98))] px-5 text-sm font-semibold tracking-[0.01em] text-white shadow-[0_20px_34px_rgba(1,8,10,0.3),inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:-translate-y-px hover:border-cyan-300/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300/80 sm:px-6 sm:text-base"
+                  type="submit"
+                >
+                  Inspect Surface
                 </button>
               </div>
             </form>
@@ -643,171 +881,225 @@ function App() {
 
         {surfaceError ? <section className="error-banner">{surfaceError}</section> : null}
 
-        <section className="content-grid">
-          <div className="main-column">
-            <section className="dashboard-grid">
-              <article className="card card-wide surface-card" id="surface-lab">
-                <div className="card-header">
-                  <div>
-                    <span className="eyebrow">Surface overview</span>
-                    <h3>Heatmap by expiry and moneyness</h3>
-                  </div>
-                  <span className="hero-pill">Primary read</span>
-                </div>
-                {surfaceLoading || !surface || !heatmap ? (
-                  <div className="empty-panel">Loading the current option surface...</div>
-                ) : (
-                  <Heatmap heatmap={heatmap} />
-                )}
-                <div className="surface-footnote">
-                  <span>{summary?.narrative ?? 'The heatmap anchors the read before you inspect the 3D scene.'}</span>
-                  <span>{heatmap ? `IV range ${formatPercent(heatmap.minIv)} to ${formatPercent(heatmap.maxIv)}` : 'Awaiting snapshot'}</span>
-                </div>
-              </article>
-
-              <LineChart
-                className="span-6"
-                points={frontSkew}
-                subtitle="Front-month skew"
-                title="Skew"
-                valueFormatter={formatPercent}
-              />
-
-              <LineChart
-                className="span-6"
-                points={termStructure}
-                subtitle="ATM term structure"
-                title="Term"
-                valueFormatter={formatPercent}
-              />
-
-              <article className="card span-7 scene-card" id="surface-scene">
-                <div className="card-header">
-                  <div>
-                    <span className="eyebrow">Surface lab</span>
-                    <h3>Interactive 3D view</h3>
-                  </div>
-                  <span className="hero-pill">Orbit and inspect</span>
-                </div>
-                <div className="scene-frame">
-                  {scenePoints.length === 0 ? (
-                    <div className="empty-panel">No 3D points available for this surface.</div>
-                  ) : (
-                    <Suspense fallback={<div className="empty-panel">Loading the 3D surface lab...</div>}>
-                      <SurfaceScene onHoverPoint={setHoveredPoint} points={scenePoints} />
-                    </Suspense>
-                  )}
-                </div>
-              </article>
-
-              <article className="card span-5" id="contracts">
-                <div className="card-header">
-                  <div>
-                    <span className="eyebrow">Richest contracts</span>
-                    <h3>Highest implied vols in the current surface</h3>
-                  </div>
-                </div>
-                {notableContracts.length === 0 ? (
-                  <div className="empty-panel">No contracts available in the current surface.</div>
-                ) : (
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Expiry</th>
-                          <th>Strike</th>
-                          <th>Moneyness</th>
-                          <th>IV</th>
-                          <th>Mid price</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {notableContracts.map((point) => (
-                          <tr key={`${point.expirationDate}-${point.strike}`}>
-                            <td>{point.expirationDate}</td>
-                            <td>{point.strike.toFixed(2)}</td>
-                            <td>{(point.moneyness * 100).toFixed(1)}%</td>
-                            <td>{formatPercent(point.impliedVol)}</td>
-                            <td>{formatCurrency(point.optionPrice)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </article>
-
-              <section className="card card-wide page-cta">
-                <div>
-                  <span className="eyebrow">Next move</span>
-                  <h3>Inspect another surface and compare the shape.</h3>
-                  <p>Keep the same read path: spot, skew, term structure, then the richest contracts.</p>
-                </div>
-                <a className="primary-button" href="#ticker-search">
-                  Inspect another surface
-                </a>
-              </section>
-            </section>
-          </div>
-
-          <aside className="secondary-panel">
-            <section className="card">
-              <span className="eyebrow">How to read this</span>
-              <h3>Three quick rules</h3>
-              <ul className="rule-list">
-                <li>Higher cells or points mean the market is implying more future volatility.</li>
-                <li>Moneyness near 100% is closest to at-the-money.</li>
-                <li>Start with the heatmap, then use the 3D scene to isolate shape and outliers.</li>
-              </ul>
-            </section>
-
-            <section className="card">
-              <span className="eyebrow">Selection</span>
-              <h3>{selectedTicker}</h3>
-              <p className="selection-copy">{activeInstrument?.name ?? 'Yahoo Finance live option chain'}</p>
-              <div className="info-stack">
-                <div>
-                  <span>Source</span>
-                  <strong>Yahoo Finance</strong>
-                </div>
-                <div>
-                  <span>Refresh</span>
-                  <strong>30s UI poll</strong>
-                </div>
-                <div>
-                  <span>View</span>
-                  <strong>Heatmap + R3F</strong>
-                </div>
+        <section className="brief-grid">
+          <section className="card brief-card">
+            <span className="eyebrow">Selection</span>
+            <h3>{selectedTicker}</h3>
+            <p className="selection-copy">{activeInstrument?.name ?? 'Yahoo Finance live option chain'}</p>
+            <div className="info-stack">
+              <div>
+                <span>Source</span>
+                <strong>Yahoo Finance</strong>
               </div>
-            </section>
+              <div>
+                <span>Refresh</span>
+                <strong>30s UI poll</strong>
+              </div>
+              <div>
+                <span>Front read</span>
+                <strong>{summary?.frontExpiry ?? 'Awaiting snapshot'}</strong>
+              </div>
+            </div>
+          </section>
 
-            <section className="card">
-              <span className="eyebrow">Hovered point</span>
-              <h3>
-                {hoveredPoint ? `${hoveredPoint.expirationDate} @ ${hoveredPoint.strike.toFixed(2)}` : 'Move over the 3D scene'}
-              </h3>
-              {hoveredPoint ? (
-                <div className="info-stack">
-                  <div>
-                    <span>Moneyness</span>
-                    <strong>{(hoveredPoint.moneyness * 100).toFixed(1)}%</strong>
-                  </div>
-                  <div>
-                    <span>Implied vol</span>
-                    <strong>{formatPercent(hoveredPoint.impliedVol)}</strong>
-                  </div>
-                  <div>
-                    <span>Time to expiry</span>
-                    <strong>{hoveredPoint.timeToExpiry.toFixed(3)}y</strong>
-                  </div>
+          <section className="card brief-card">
+            <span className="eyebrow">How to read this</span>
+            <h3>Start wide, then drill in.</h3>
+            <ol className="read-path">
+              <li>
+                <span>1</span>
+                <div>
+                  <strong>Scan the surface map</strong>
+                  <p>Look for higher-IV pockets across expiry and moneyness before inspecting individual contracts.</p>
                 </div>
-              ) : (
-                <p className="selection-copy">
-                  The 3D panel is intentionally secondary. Use it to inspect shape and isolate contracts after the 2D read.
-                </p>
-              )}
-            </section>
-          </aside>
+              </li>
+              <li>
+                <span>2</span>
+                <div>
+                  <strong>Use the shape lab</strong>
+                  <p>Rotate the widened 3D surface to confirm curvature, skew, and whether outliers are persistent.</p>
+                </div>
+              </li>
+              <li>
+                <span>3</span>
+                <div>
+                  <strong>Pin the richest contracts</strong>
+                  <p>Use the contract cards to preview or pin standout points without hunting in a separate side rail.</p>
+                </div>
+              </li>
+            </ol>
+          </section>
+        </section>
+
+        <section className="dashboard-grid">
+          <article className="card card-wide surface-card" id="surface-lab">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">Surface overview</span>
+                <h3>Surface map by expiry and moneyness</h3>
+              </div>
+              <span className="hero-pill">Start here</span>
+            </div>
+            {surfacePending ? (
+              <EmptyPanel loading>Loading the current option surface...</EmptyPanel>
+            ) : !surface || !heatmap ? (
+              <EmptyPanel>No heatmap data available for this surface.</EmptyPanel>
+            ) : (
+              <Heatmap heatmap={heatmap} />
+            )}
+            <div className="surface-footnote">
+              <span>{summary?.narrative ?? 'The heatmap anchors the read before you inspect the 3D scene.'}</span>
+              <span>{heatmap ? `IV range ${formatPercent(heatmap.minIv)} to ${formatPercent(heatmap.maxIv)}` : 'Awaiting snapshot'}</span>
+            </div>
+          </article>
+
+          <LineChart
+            className="span-6"
+            loading={surfacePending}
+            points={frontSkew}
+            subtitle={skewSubtitle}
+            title="Skew"
+            valueFormatter={formatPercent}
+          />
+
+          <LineChart
+            className="span-6"
+            loading={surfacePending}
+            points={termStructure}
+            subtitle={termSubtitle}
+            title="Term"
+            valueFormatter={formatPercent}
+          />
+
+          <article className="card card-wide scene-card" id="surface-scene">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">Surface lab</span>
+                <h3>Surface shape lab</h3>
+              </div>
+              <div className="scene-status">
+                <span className="scene-status-label">{focusPointStatus}</span>
+                <strong>
+                  {focusPoint
+                    ? (focusPoint.contractSymbol ?? `${focusPoint.expirationDate} @ ${focusPoint.strike.toFixed(2)}`)
+                    : 'Hover or click a point to inspect it'}
+                </strong>
+              </div>
+            </div>
+            <div className="scene-layout">
+              <div className="scene-frame">
+                {surfacePending ? (
+                  <EmptyPanel loading>Loading the surface shape lab...</EmptyPanel>
+                ) : scenePoints.length === 0 ? (
+                  <EmptyPanel>No surface points available for this view.</EmptyPanel>
+                ) : (
+                  <Suspense fallback={<EmptyPanel loading>Loading the surface shape lab...</EmptyPanel>}>
+                    <SurfaceScene
+                      onHoverPoint={setHoveredPoint}
+                      onSelectPoint={pinContract}
+                      points={scenePoints}
+                      previousPoints={previousScenePoints}
+                      referenceIv={summary?.frontAtmIv ?? null}
+                      selectedPoint={selectedPoint}
+                    />
+                  </Suspense>
+                )}
+              </div>
+              <ContractDetailPanel
+                focusPoint={focusPoint}
+                focusPointStatus={focusPointStatus}
+                selectedTicker={selectedTicker}
+              />
+            </div>
+            <div className="scene-footnote">
+              <span>Click any point or contract card to pin it. The pinned contract now drives the skew and term slices.</span>
+              <span>
+                {previousScenePoints.length > 0
+                  ? 'Current points are compared against the prior snapshot.'
+                  : 'Point color is driven by option premium until a prior snapshot is available.'}
+              </span>
+            </div>
+          </article>
+
+          <article className="card card-wide contracts-card" id="contracts">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">Richest contracts</span>
+                <h3>Highest implied vols, laid out for scanning</h3>
+              </div>
+              <span className="hero-pill">Preview or pin in the lab</span>
+            </div>
+            {surfacePending ? (
+              <EmptyPanel loading>Loading the contract list...</EmptyPanel>
+            ) : notableContracts.length === 0 ? (
+              <EmptyPanel>No contracts available in the current surface.</EmptyPanel>
+            ) : (
+              <div className="contracts-grid">
+                {notableContracts.map((point, index) => {
+                  const contractKey = pointIdentity(point)
+                  const enrichedPoint = buildHoverPoint(point, previousPointMap)
+                  const isFocus = contractKey === focusPointKey
+                  const isPinned = contractKey === selectedPointKey
+
+                  return (
+                    <button
+                      key={contractKey}
+                      aria-pressed={isPinned}
+                      className={`contract-card${isFocus ? ' is-focus' : ''}${isPinned ? ' is-pinned' : ''}`}
+                      onBlur={() => previewContract(null)}
+                      onClick={() => pinContract(point)}
+                      onFocus={() => previewContract(point)}
+                      onMouseEnter={() => previewContract(point)}
+                      onMouseLeave={() => previewContract(null)}
+                      type="button"
+                    >
+                      <div className="contract-card-top">
+                        <span className="contract-rank">#{index + 1}</span>
+                        <span className="contract-flag">{isPinned ? 'Pinned' : isFocus ? 'Previewing' : 'Pin in lab'}</span>
+                      </div>
+
+                      <div className="contract-card-headline">
+                        <strong>{formatPercent(point.impliedVol)}</strong>
+                        <p>
+                          {point.expirationDate} · Strike {formatCurrency(point.strike)}
+                        </p>
+                      </div>
+
+                      <div className="contract-metrics">
+                        <div>
+                          <span>Moneyness</span>
+                          <strong>{(point.moneyness * 100).toFixed(1)}%</strong>
+                        </div>
+                        <div>
+                          <span>Mark</span>
+                          <strong>{formatCurrency(point.optionPrice)}</strong>
+                        </div>
+                        <div>
+                          <span>Tenor</span>
+                          <strong>{point.timeToExpiry.toFixed(3)}y</strong>
+                        </div>
+                        <div>
+                          <span>IV change</span>
+                          <strong>{formatIvChange(enrichedPoint.ivChange)}</strong>
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </article>
+
+          <section className="card card-wide page-cta">
+            <div>
+              <span className="eyebrow">Next move</span>
+              <h3>Inspect another surface and compare the shape.</h3>
+              <p>Keep the same read path: surface map, shape lab, then the richest contracts worth pinning.</p>
+            </div>
+            <a className="primary-button" href="#ticker-search">
+              Inspect another surface
+            </a>
+          </section>
         </section>
         <SearchOverlay
           busy={searchBusy}
@@ -825,7 +1117,7 @@ function App() {
 
 function Heatmap({ heatmap }: { heatmap: HeatmapMatrix }) {
   if (heatmap.expiries.length === 0) {
-    return <div className="empty-panel">No heatmap data available for this surface.</div>
+    return <EmptyPanel>No heatmap data available for this surface.</EmptyPanel>
   }
 
   return (
