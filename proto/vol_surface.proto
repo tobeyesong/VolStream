@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package volsurface;
+
+// ---------------------------------------------------------------------------
+// Service: VolSurfaceService
+// ---------------------------------------------------------------------------
+// Bidirectional streaming RPC. The client sends subscription/unsubscription
+// requests and receives surface snapshots + incremental updates in return.
+// ---------------------------------------------------------------------------
+
+service VolSurfaceService {
+  // Client streams SubscriptionRequests, server streams SurfaceUpdates.
+  rpc SubscribeSurface(stream SubscriptionRequest) returns (stream SurfaceUpdate);
+
+  // Unary RPC: get available instruments the server is tracking.
+  rpc GetInstruments(Empty) returns (InstrumentList);
+
+  // Unary RPC: search Yahoo Finance for instruments by ticker or name.
+  rpc SearchInstruments(InstrumentSearchRequest) returns (InstrumentList);
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+message Empty {}
+
+message InstrumentSearchRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message InstrumentList {
+  repeated Instrument instruments = 1;
+}
+
+message Instrument {
+  string ticker = 1;
+  string name = 2;
+  string exchange = 3;
+  string instrument_type = 4;
+}
+
+message SubscriptionRequest {
+  enum Action {
+    SUBSCRIBE = 0;
+    UNSUBSCRIBE = 1;
+  }
+  Action action = 1;
+  string ticker = 2;
+  // Client can configure these per-subscription
+  SurfaceConfig config = 3;
+}
+
+message SurfaceConfig {
+  double risk_free_rate = 1;     // e.g. 0.05 for 5%
+  double dividend_yield = 2;     // e.g. 0.01 for 1%
+  enum YAxisMode {
+    STRIKE = 0;
+    MONEYNESS = 1;
+  }
+  YAxisMode y_axis_mode = 3;
+  double moneyness_min = 4;      // e.g. 0.8  (filter: 80% of ATM)
+  double moneyness_max = 5;      // e.g. 1.2  (filter: 120% of ATM)
+}
+
+message SurfaceUpdate {
+  enum UpdateType {
+    SNAPSHOT = 0;           // Full surface — client should replace its state
+    INCREMENTAL = 1;        // Partial update — client should merge
+    CLEAR = 2;              // Client should clear cached state (on unsub)
+  }
+  UpdateType update_type = 1;
+  string ticker = 2;
+  int64 timestamp_ms = 3;       // Unix epoch milliseconds
+  double spot_price = 4;        // Current underlying price
+
+  // The surface data points
+  repeated SurfacePoint points = 5;
+
+  // Expiration dates included in this update
+  repeated string expirations = 6;
+}
+
+message SurfacePoint {
+  double strike = 1;
+  double moneyness = 2;         // strike / spot_price
+  double time_to_expiry = 3;    // in years
+  double implied_vol = 4;
+  double option_price = 5;      // market price of the call
+  string expiration_date = 6;   // ISO date string
+}

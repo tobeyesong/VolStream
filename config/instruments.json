@@ -1,0 +1,20 @@
+{
+  "instruments": [
+    {"ticker": "AAPL", "name": "Apple Inc."},
+    {"ticker": "SPY",  "name": "SPDR S&P 500 ETF"},
+    {"ticker": "TSLA", "name": "Tesla Inc."},
+    {"ticker": "QQQ",  "name": "Invesco QQQ Trust"}
+  ],
+  "defaults": {
+    "risk_free_rate": 0.045,
+    "dividend_yield": 0.005,
+    "y_axis_mode": "MONEYNESS",
+    "moneyness_min": 0.80,
+    "moneyness_max": 1.20,
+    "update_interval_seconds": 60
+  },
+  "server": {
+    "host": "localhost",
+    "port": 50051
+  }
+}
