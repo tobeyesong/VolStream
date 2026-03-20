@@ -46,6 +46,8 @@ type SurfaceBounds = {
   minX: number
 }
 
+type Curve3D = [number, number, number][]
+
 const EXPIRY_STEP = 0.9
 const FLOOR_PADDING = 0.9
 const MAX_BRIDGE_GAP = 0.09
@@ -185,6 +187,62 @@ function buildTermCurves(
 
     return curve.length >= 2 ? curve : null
   }).filter((curve): curve is [number, number, number][] => curve !== null)
+}
+
+function buildHighlightExpiryCurve(
+  rows: SurfacePoint[][],
+  expirationDate: string,
+  expiryIndexByDate: Map<string, number>,
+  heightScale: number,
+): Curve3D | null {
+  const row = rows.find((candidate) => candidate[0]?.expirationDate === expirationDate)
+  if (!row || row.length < 2) {
+    return null
+  }
+
+  return row.map((point) => scalePoint(point, expiryIndexByDate, heightScale))
+}
+
+function buildHighlightTermCurve(
+  rows: SurfacePoint[][],
+  targetMoneyness: number,
+  expiryIndexByDate: Map<string, number>,
+  heightScale: number,
+): Curve3D | null {
+  const curve = rows
+    .map((row) => {
+      if (row.length === 0) {
+        return null
+      }
+
+      const nearestPoint = [...row].sort(
+        (left, right) => Math.abs(left.moneyness - targetMoneyness) - Math.abs(right.moneyness - targetMoneyness),
+      )[0]
+
+      if (!nearestPoint || Math.abs(nearestPoint.moneyness - targetMoneyness) > MAX_BRIDGE_GAP) {
+        return null
+      }
+
+      return scalePoint(nearestPoint, expiryIndexByDate, heightScale)
+    })
+    .filter((point): point is [number, number, number] => point !== null)
+
+  return curve.length >= 2 ? curve : null
+}
+
+function buildVerticalGuide(
+  point: Pick<SurfacePoint, 'expirationDate' | 'impliedVol' | 'moneyness'>,
+  expiryIndexByDate: Map<string, number>,
+  heightScale: number,
+): Curve3D {
+  const x = (point.moneyness - 1) * 18
+  const y = point.impliedVol * heightScale
+  const z = (expiryIndexByDate.get(point.expirationDate) ?? 0) * EXPIRY_STEP
+
+  return [
+    [x, TICK_MARK_HEIGHT, z],
+    [x, y, z],
+  ]
 }
 
 function buildSurfaceGeometry(
@@ -557,6 +615,7 @@ export function SurfaceScene({
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('canonical')
   const [cameraPresetNonce, setCameraPresetNonce] = useState(0)
+  const [hoveredScenePoint, setHoveredScenePoint] = useState<SurfaceHoverPoint | null>(null)
   const [previousSurfaceEnabled, setPreviousSurfaceEnabled] = useState(true)
   const [showReferencePlane, setShowReferencePlane] = useState(true)
 
@@ -641,6 +700,31 @@ export function SurfaceScene({
   const initialView = buildCameraView('canonical', bounds)
   const colorLegendLabel = hasPreviousSurface ? 'Color: IV change vs prior snapshot' : 'Color: option premium'
   const webglReady = supportsWebGL()
+  const highlightPoint = hoveredScenePoint ?? selectedPoint
+  const highlightExpiryCurve = useMemo(
+    () =>
+      highlightPoint
+        ? buildHighlightExpiryCurve(currentRows, highlightPoint.expirationDate, expiryIndexByDate, heightScale)
+        : null,
+    [currentRows, expiryIndexByDate, heightScale, highlightPoint],
+  )
+  const highlightTermCurve = useMemo(
+    () =>
+      highlightPoint
+        ? buildHighlightTermCurve(currentRows, highlightPoint.moneyness, expiryIndexByDate, heightScale)
+        : null,
+    [currentRows, expiryIndexByDate, heightScale, highlightPoint],
+  )
+  const highlightVerticalGuide = useMemo(
+    () => (highlightPoint ? buildVerticalGuide(highlightPoint, expiryIndexByDate, heightScale) : null),
+    [expiryIndexByDate, heightScale, highlightPoint],
+  )
+
+  useEffect(() => {
+    if (!selectedPoint) {
+      setHoveredScenePoint(null)
+    }
+  }, [selectedPoint])
 
   function requestCameraPreset(preset: CameraPreset) {
     setCameraPreset(preset)
@@ -670,6 +754,7 @@ export function SurfaceScene({
             invalidate()
           }}
           onPointerMissed={() => {
+            setHoveredScenePoint(null)
             onHoverPoint(null)
             onSelectPoint?.(null)
           }}
@@ -704,6 +789,15 @@ export function SurfaceScene({
           {currentTermCurves.map((curve, index) => (
             <Polyline color="#72878d" key={`term-curve-${index}`} opacity={0.58} points={curve} />
           ))}
+          {highlightExpiryCurve ? (
+            <Polyline color="#1b6a8c" opacity={0.98} points={highlightExpiryCurve} />
+          ) : null}
+          {highlightTermCurve ? (
+            <Polyline color="#c28e43" opacity={0.94} points={highlightTermCurve} />
+          ) : null}
+          {highlightVerticalGuide ? (
+            <Polyline color="#344b57" opacity={0.8} points={highlightVerticalGuide} />
+          ) : null}
 
           {scenePoints.map((point) => (
             <mesh
@@ -711,10 +805,14 @@ export function SurfaceScene({
               position={point.position}
               onPointerEnter={(event) => {
                 event.stopPropagation()
+                setHoveredScenePoint(point.hoverPoint)
                 onHoverPoint(point.hoverPoint)
                 document.body.style.cursor = 'pointer'
               }}
               onPointerLeave={() => {
+                setHoveredScenePoint((current) =>
+                  current && pointKey(current) === point.key ? null : current,
+                )
                 if (!selectedPoint || point.key !== pointKey(selectedPoint)) {
                   onHoverPoint(null)
                 }

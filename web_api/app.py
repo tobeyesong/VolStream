@@ -11,12 +11,14 @@ import yfinance as yf
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.staticfiles import StaticFiles
 
 from computation.surface_builder import VolSurfaceSnapshot, build_surface
 
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "instruments.json"
+FRONTEND_DIST_PATH = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 MAX_SEARCH_RESULTS = 20
 SUPPORTED_SEARCH_TYPES = {"EQUITY", "ETF", "INDEX"}
 DEFAULT_CORS_ORIGINS = (
@@ -235,3 +237,8 @@ def get_surface(ticker: str) -> SurfaceSnapshotOut:
         raise HTTPException(status_code=404, detail=f"No option surface available for {ticker.upper()}")
 
     return snapshot_payload(snapshot)
+
+
+if FRONTEND_DIST_PATH.exists():
+    logger.info("Serving bundled frontend from %s", FRONTEND_DIST_PATH)
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST_PATH, html=True), name="frontend")

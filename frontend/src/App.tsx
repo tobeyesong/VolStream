@@ -26,6 +26,8 @@ import {
 import type { CurvePoint, HeatmapMatrix, Instrument, SurfaceHoverPoint, SurfacePoint, SurfaceSnapshot } from './types'
 
 const POLL_INTERVAL_MS = 30_000
+const FEED_WATCH_LATENCY_MS = Math.round(POLL_INTERVAL_MS * 1.5)
+const FEED_STALE_MS = Math.round(POLL_INTERVAL_MS * 2.5)
 const NAV_LINKS = [
   { id: 'overview', label: 'Overview' },
   { id: 'surface-lab', label: 'Surface Lab' },
@@ -71,6 +73,22 @@ function formatTimestamp(timestampMs: number): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(timestampMs)
+}
+
+function formatElapsedTime(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000))
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`
+  }
+
+  const totalMinutes = Math.round(totalSeconds / 60)
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`
+  }
+
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
 }
 
 function formatLastTradeTime(value: string | null): string {
@@ -191,6 +209,102 @@ function selectInstrument(
   setSearchFocused(false)
   setHoveredPoint(null)
   setSelectedPoint(null)
+}
+
+type FeedHealth = {
+  detail: string
+  label: string
+  tone: 'error' | 'live' | 'refreshing' | 'warning'
+}
+
+function buildFeedHealth({
+  consecutiveSurfaceFailures,
+  nowMs,
+  surface,
+  surfaceError,
+  surfaceLoading,
+  surfaceRefreshing,
+  lastSuccessfulRefreshMs,
+}: {
+  consecutiveSurfaceFailures: number
+  nowMs: number
+  surface: SurfaceSnapshot | null
+  surfaceError: string | null
+  surfaceLoading: boolean
+  surfaceRefreshing: boolean
+  lastSuccessfulRefreshMs: number | null
+}): FeedHealth {
+  if (!surface && surfaceLoading) {
+    return {
+      detail: 'Loading the first Yahoo Finance option chain.',
+      label: 'Booting live feed',
+      tone: 'refreshing',
+    }
+  }
+
+  if (surfaceError && !surface) {
+    return {
+      detail: 'Yahoo Finance is unavailable and there is no recent snapshot to fall back to.',
+      label: 'Feed offline',
+      tone: 'error',
+    }
+  }
+
+  const snapshotAgeMs = lastSuccessfulRefreshMs === null ? null : Math.max(0, nowMs - lastSuccessfulRefreshMs)
+
+  if (surface && consecutiveSurfaceFailures > 0) {
+    if (snapshotAgeMs !== null && snapshotAgeMs >= FEED_STALE_MS) {
+      return {
+        detail: `Using the last good snapshot from ${formatTimestamp(surface.timestampMs)} while refresh retries keep failing.`,
+        label: 'Stale snapshot',
+        tone: 'error',
+      }
+    }
+
+    return {
+      detail: `Yahoo refresh failed ${consecutiveSurfaceFailures === 1 ? 'once' : `${consecutiveSurfaceFailures} times`}. Holding the last good snapshot from ${snapshotAgeMs === null ? formatTimestamp(surface.timestampMs) : `${formatElapsedTime(snapshotAgeMs)} ago`}.`,
+      label: 'Retrying feed',
+      tone: 'warning',
+    }
+  }
+
+  if (surface && surfaceRefreshing) {
+    return {
+      detail: `Polling Yahoo again. Last successful refresh ${snapshotAgeMs === null ? 'just completed' : `${formatElapsedTime(snapshotAgeMs)} ago`}.`,
+      label: 'Refreshing',
+      tone: 'refreshing',
+    }
+  }
+
+  if (surface && snapshotAgeMs !== null && snapshotAgeMs >= FEED_STALE_MS) {
+    return {
+      detail: `The last successful refresh was ${formatElapsedTime(snapshotAgeMs)} ago, so this snapshot may be stale.`,
+      label: 'Stale snapshot',
+      tone: 'warning',
+    }
+  }
+
+  if (surface && snapshotAgeMs !== null && snapshotAgeMs >= FEED_WATCH_LATENCY_MS) {
+    return {
+      detail: `Polling is still running, but the last successful refresh was ${formatElapsedTime(snapshotAgeMs)} ago.`,
+      label: 'Watch latency',
+      tone: 'warning',
+    }
+  }
+
+  if (surface) {
+    return {
+      detail: `Live polling is healthy. Last successful refresh ${snapshotAgeMs === null ? 'just completed' : `${formatElapsedTime(snapshotAgeMs)} ago`}.`,
+      label: 'Live',
+      tone: 'live',
+    }
+  }
+
+  return {
+    detail: 'Waiting for the next live snapshot.',
+    label: 'Waiting for surface',
+    tone: 'refreshing',
+  }
 }
 
 type SearchOverlayRect = {
@@ -558,12 +672,16 @@ function App() {
   const [previousSurface, setPreviousSurface] = useState<SurfaceSnapshot | null>(null)
   const [surfaceError, setSurfaceError] = useState<string | null>(null)
   const [surfaceLoading, setSurfaceLoading] = useState(false)
+  const [surfaceRefreshing, setSurfaceRefreshing] = useState(false)
+  const [lastSuccessfulRefreshMs, setLastSuccessfulRefreshMs] = useState<number | null>(null)
+  const [consecutiveSurfaceFailures, setConsecutiveSurfaceFailures] = useState(0)
   const [hoveredPoint, setHoveredPoint] = useState<SurfaceHoverPoint | null>(null)
   const [selectedPoint, setSelectedPoint] = useState<SurfaceHoverPoint | null>(null)
   const [searchOverlayRect, setSearchOverlayRect] = useState<SearchOverlayRect | null>(null)
   const searchWrapRef = useRef<HTMLDivElement | null>(null)
   const surfaceRef = useRef<SurfaceSnapshot | null>(null)
   const deferredQuery = useDeferredValue(searchQuery.trim())
+  const [feedClockMs, setFeedClockMs] = useState(() => Date.now())
 
   useEffect(() => {
     surfaceRef.current = surface
@@ -674,6 +792,7 @@ function App() {
     let active = true
 
     async function loadSurface(isInitialLoad: boolean) {
+      setSurfaceRefreshing(true)
       if (isInitialLoad) {
         setSurfaceLoading(true)
       }
@@ -683,6 +802,7 @@ function App() {
         if (!active) {
           return
         }
+        const completedAt = Date.now()
         const priorSurface = surfaceRef.current
         startTransition(() => {
           setPreviousSurface(priorSurface && priorSurface.ticker === nextSurface.ticker ? priorSurface : null)
@@ -691,14 +811,20 @@ function App() {
           setHoveredPoint(null)
           setSelectedPoint(null)
         })
+        setLastSuccessfulRefreshMs(completedAt)
+        setConsecutiveSurfaceFailures(0)
       } catch (error) {
         if (!active) {
           return
         }
         setSurfaceError(error instanceof Error ? error.message : 'Unable to load the surface.')
+        setConsecutiveSurfaceFailures((current) => current + 1)
       } finally {
-        if (active && isInitialLoad) {
-          setSurfaceLoading(false)
+        if (active) {
+          setSurfaceRefreshing(false)
+          if (isInitialLoad) {
+            setSurfaceLoading(false)
+          }
         }
       }
     }
@@ -713,6 +839,14 @@ function App() {
       window.clearInterval(intervalId)
     }
   }, [selectedTicker, surfaceRefreshNonce])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setFeedClockMs(Date.now())
+    }, 5_000)
+
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   const activeInstrument =
     configuredInstruments.find((instrument) => instrument.ticker === selectedTicker) ??
@@ -748,11 +882,16 @@ function App() {
   const termSubtitle = crossSectionAnchor
     ? `${(crossSectionAnchor.moneyness * 100).toFixed(0)}% moneyness term structure`
     : 'ATM term structure'
-  const heroStatus = surfaceError
-    ? 'Live feed temporarily unavailable.'
-    : surfaceLoading
-      ? 'Loading the latest chain...'
-      : 'Live data refreshes every 30 seconds.'
+  const feedHealth = buildFeedHealth({
+    consecutiveSurfaceFailures,
+    lastSuccessfulRefreshMs,
+    nowMs: feedClockMs,
+    surface,
+    surfaceError,
+    surfaceLoading,
+    surfaceRefreshing,
+  })
+  const heroStatus = surfaceError && !surface ? surfaceError : feedHealth.detail
 
   function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -818,7 +957,7 @@ function App() {
       <header className="app-chrome">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
-            <img src="/logo-mark.svg" alt="" />
+            <img src="/logo-mark.png" alt="" />
           </div>
           <div>
             <span className="brand-name">VolStream</span>
@@ -849,6 +988,7 @@ function App() {
           <div className="chrome-pill-group">
             <span className="hero-pill">Yahoo Finance source</span>
             <span className="hero-pill">30s poll</span>
+            <span className={`hero-pill hero-pill-health hero-pill-health-${feedHealth.tone}`}>{feedHealth.label}</span>
           </div>
         </section>
       </header>
@@ -931,6 +1071,10 @@ function App() {
               <div>
                 <span>Surface points</span>
                 <strong>{summary ? String(summary.pointCount) : '—'}</strong>
+              </div>
+              <div>
+                <span>Feed health</span>
+                <strong>{feedHealth.label}</strong>
               </div>
             </div>
 
